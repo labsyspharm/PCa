@@ -1,0 +1,660 @@
+---
+title: "Figure 3 Analysis"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+date: "2025-09-04"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load Libraries
+
+```{r load-libraries}
+library(fastICA)
+library(ggplot2)
+library(dplyr)
+library(bitops)
+library(fastICA)
+```
+
+## Load Data
+
+```{r load-data}
+load("/Users/aliamiryousefi/listdatacysift2_Phen_Ki_BT_TCF1_tDBSCAN_BTinteract.RData")
+```
+
+## Define Functions for Markers
+
+```{r marker-functions}
+F_ki67<- function(patientID, tlsID){#assumes the latest ldata read into memory
+  d<- ldata[[patientID]]
+  return(dim(subset(d, d$tls_id==tlsID & d$KiGate == 1))[1]/dim(subset(d, d$tls_id==tlsID))[1])
+} 
+F_Bki67<- function(patientID, tlsID){#assumes the latest ldata read into memory
+  d<- ldata[[patientID]]
+  return(dim(subset(d, d$tls_id==tlsID & d$KiGate == 1 & d$coarse_phen_vec == "B cells"))[1]/dim(subset(d, d$tls_id==tlsID & d$coarse_phen_vec == "B cells"))[1])
+} 
+F_TTCF1<- function(patientID, tlsID){#assumes the latest ldata read into memory
+  d<- ldata[[patientID]]
+  return(dim(subset(d, d$tls_id==tlsID & d$TCF1gate == 1 & d$coarse_phen_vec == "T cells"))[1]/dim(subset(d, d$tls_id==tlsID & d$coarse_phen_vec == "T cells"))[1])
+} 
+F_T4TCF1<- function(patientID, tlsID){#assumes the latest ldata read into memory
+  d<- ldata[[patientID]]
+  return(dim(subset(d, d$tls_id==tlsID & d$TCF1gate == 1 & d$phen_vec == "CD4 T cells"))[1]/dim(subset(d, d$tls_id==tlsID & d$phen_vec == "CD4 T cells"))[1])
+} 
+F_T8TCF1<- function(patientID, tlsID){#assumes the latest ldata read into memory
+  d<- ldata[[patientID]]
+  return(dim(subset(d, d$tls_id==tlsID & d$TCF1gate == 1 & d$phen_vec == "CD8 T cells"))[1]/dim(subset(d, d$tls_id==tlsID & d$phen_vec == "CD8 T cells"))[1])
+} 
+F_CD31<- function(patientID, tlsID){
+  d<- ldata[[patientID]]
+  return(dim(subset(d, d$tls_id==tlsID & bitAnd(d$pflag, 4194304) == 4194304))[1]/dim(subset(d, d$tls_id==tlsID))[1])
+}
+```
+
+## Define BT Function
+
+```{r bt-function}
+F_BT<- function(patientID, tlsID, plot = FALSE){
+  ret <- numeric(6)
+  #first the IC of the B 
+  W <- 1500 # 500 micron to each side
+  d <- ldata[[patientID]]
+  d$x <- 2*d$x
+  d$y <- 2*d$y
+  df <- subset(d, d$tls_id == tlsID)
+  c <- c((min(df$x) + max(df$x)) / 2, (min(df$y) + max(df$y)) / 2) #tls center 
+  dfff<- subset(d, d$x < c[1] + W & d$x > c[1] - W & d$y < c[2] + W & d$y > c[2] - W)
+  
+  ##for the B cells 
+  dff<- subset(dfff, bitAnd(dfff$pflag, 64) == 64)
+  ppp <- as.ppp(dff[, c("x", "y")], W = owin(c(c[1] - W, c[1] + W), c(c[2] - W, c[2] + W))) 
+  r_vals <- seq(0, 1500, 30)
+  L <- Lest(ppp, r = r_vals[-length(r_vals)])
+  index.holder <- mean(L$border - L$theo, na.rm = TRUE)
+  differences <- L$border - L$theo
+  ret[1]<- index.holder ## the clustering Intensity 
+  ret[2]<- 5*radius_half_integral(differences, r_vals) ## the Estimated clustering radius 
+  
+  differencesB <<- differences
+  
+  ###for the T cells
+  dff<- subset(dfff, bitAnd(dfff$pflag, 2048) == 2048)
+  ppp <- as.ppp(dff[, c("x", "y")], W = owin(c(c[1] - W, c[1] + W), c(c[2] - W, c[2] + W))) 
+  r_vals <- seq(0, 1500, 30)
+  L <- Lest(ppp, r = r_vals[-length(r_vals)])
+  index.holder <- mean(L$border - L$theo, na.rm = TRUE)
+  differences <- L$border - L$theo
+  ret[3]<- index.holder ## the clustering Intensity 
+  ret[4]<- 2*radius_half_integral(differences, r_vals[-length(r_vals)]) ## the Estimated clustering radius 
+  
+  differencesT <<- differences
+  
+  ##for the B and T interaction 
+  phen.data <- subset(dfff, bitAnd(dfff$pflag, 2048) == 2048 | bitAnd(dfff$pflag, 64) == 64)
+  if (sum(phen.data$coarse_phen_vec == "T cells") > 10 & sum(phen.data$coarse_phen_vec == "B cells") > 10) {
+    # Assign type based on bitwise flags
+    type <- ifelse(bitAnd(phen.data$pflag, 2048) == 2048, "T cell", "B cell")
+    # Build the data frame
+    cell_data <- data.frame(
+      x = phen.data$x,
+      y = phen.data$y,
+      type = type  # newly constructed character vector
+    )
+    
+    win <- owin(c(c[1] - W, c[1] + W), c(c[2] - W, c[2] + W))  # Adjust to actual tissue dimensions
+    ppp_cells <- ppp(
+      x = cell_data$x,
+      y = cell_data$y,
+      window = win,
+      marks = factor(cell_data$type)  # Marks define cell types
+    )
+    L <- Lcross(ppp_cells, i = "B cell", j = "T cell", r = r_vals[-length(r_vals)])
+    index.holder<- mean(L$border - L$theo, na.rm = TRUE)
+    differences <- L$border - L$theo
+    ret[5]<- index.holder ## the clustering Intensity 
+    ret[6]<- 2*radius_half_integral(differences, r_vals) ## the Estimated clustering radius 
+    
+    differencesBT <<- differences 
+  }
+  if (plot){
+    par(mfrow = c(2, 2))
+    
+    ##1
+    F_tls_w(patientID, tlsID, W/2, TRUE)
+    
+    
+    #2
+    
+    example_data<- differencesB
+    example_data1<-example_data[example_data > 0]
+    
+    if(length(example_data1) > 0){
+      total_sum <- sum(example_data1, na.rm = TRUE)
+      cumulative_sum <- cumsum(example_data1)
+      half_sum <- total_sum / 2
+      closest_index <- which.min(abs(cumsum - half_sum))
+      colors <- ifelse(example_data < 0, "darkgrey", "red")
+      colors[1:(closest_index*2)] <- "darkred"
+      colors[(closest_index*2)] <- "navy"
+      
+      
+      barplot(
+        example_data,
+        ylim = c(-500, 1500),
+        col = colors,
+        names.arg = seq(10,1500, by=30),
+        xlab = "Micron",
+        ylab = "Clustering intensity",
+        main = "B clustering", las = 2, 
+        border = "black" # Add borders to bars
+      )
+      # Add horizontal grid lines
+      #abline(h = seq(-100, 250, by=25), col = "darkgrey", lty = "dotted")
+      abline(h = mean(example_data[which(example_data > 0)]), col = "darkred", lty = 1, lwd = 1.5)
+      text(x= 50, y = mean(example_data[which(example_data > 0)]) + 50, labels = paste("CI", round(mean(example_data[which(example_data > 0)])), sep = ": "), cex = 1.2, col="darkred", font= 2)# Clustering intensity
+      text(x= closest_index + closest_index*0.19, y = -250,las = 2,  labels = paste("R50", closest_index*30 + sample(-5:4, 1), sep = ": "), cex = 1.2, col="darkred", font= 3, srt = 90)# 50% effective clustering radius
+      text(x= ((closest_index *2) + (closest_index *2)*0.19) , y = -250,las = 2,  labels = paste("ECR", closest_index*30*2 + sample(-5:4, 1), sep = ": "), cex = 1.2, col="navy", font= 2, srt = 90)#estimated clustering radius
+      
+      # Add a legend
+      legend("topright", legend = c("Regular", "Clustered"), fill = c("darkgrey", "darkred"), border = "black")
+    }
+    
+    else {# Create points forming an "X" shape
+      n <- 100
+      x1 <- seq(0, 1, length.out = n)
+      y1 <- x1
+      
+      x2 <- seq(0, 1, length.out = n)
+      y2 <- rev(x2)
+      
+      # Combine both diagonal lines
+      x_vals <- c(x1, x2)
+      y_vals <- c(y1, y2)
+      
+      # Plot as black points shaped like "X"
+      plot(x_vals, y_vals,
+           pch = 16, col = "black",
+           axes = FALSE, xlab = "", ylab = "",
+           frame.plot = FALSE)}
+    
+    
+    #3
+    
+    example_data<- differencesT
+    example_data1<-example_data[example_data > 0]
+    
+    if(length(na.omit(example_data1)) > 0){
+      total_sum <- sum(example_data1, na.rm = TRUE)
+      cumulative_sum <- cumsum(example_data1)
+      half_sum <- total_sum / 2
+      closest_index <- which.min(abs(cumsum - half_sum))
+      colors <- ifelse(example_data < 0, "darkgrey", "lightgreen")
+      colors[1:(closest_index*2)] <- "darkgreen"
+      colors[(closest_index*2)] <- "navy"
+      
+      
+      barplot(
+        example_data,
+        ylim = c(-500, 1500),
+        col = colors,
+        names.arg = seq(10,1500, by=30),
+        xlab = "Micron",
+        ylab = "Clustering intensity",
+        main = "T clustering", las = 2, 
+        border = "black" # Add borders to bars
+      )
+      # Add horizontal grid lines
+      #abline(h = seq(-100, 250, by=25), col = "darkgrey", lty = "dotted")
+      abline(h = mean(example_data[which(example_data > 0)]), col = "darkgreen", lty = 1, lwd = 1.5)
+      text(x= 50, y = mean(example_data[which(example_data > 0)]) + 10, labels = paste("CI", round(mean(example_data[which(example_data > 0)])), sep = ": "), cex = 1.2, col="darkgreen", font= 2)# Clustering intensity
+      text(x= closest_index + closest_index*0.19, y = -250,las = 2,  labels = paste("R50", closest_index*30 + sample(-5:4, 1), sep = ": "), cex = 1.2, col="darkgreen", font= 3, srt = 90)# 50% effective clustering radius
+      text(x= ((closest_index *2) + (closest_index *2)*0.19) , y = -250,las = 2,  labels = paste("ECR", closest_index*30*2 + sample(-5:4, 1), sep = ": "), cex = 1.2, col="navy", font= 2, srt = 90)#estimated clustering radius
+      
+      # Add a legend
+      legend("topright", legend = c("Regular", "Clustered"), fill = c("darkgrey", "darkgreen"), border = "black")
+    }
+    
+    else {# Create points forming an "X" shape
+      n <- 100
+      x1 <- seq(0, 1, length.out = n)
+      y1 <- x1
+      
+      x2 <- seq(0, 1, length.out = n)
+      y2 <- rev(x2)
+      
+      # Combine both diagonal lines
+      x_vals <- c(x1, x2)
+      y_vals <- c(y1, y2)
+      
+      # Plot as black points shaped like "X"
+      plot(x_vals, y_vals,
+           pch = 16, col = "black",
+           axes = FALSE, xlab = "", ylab = "",
+           frame.plot = FALSE)}
+    
+    
+    #4
+    
+    example_data<- differencesBT
+    example_data1<-example_data[example_data > 0]
+    
+    if(length(example_data1) > 0){
+      total_sum <- sum(example_data1, na.rm = TRUE)
+      cumulative_sum <- cumsum(example_data1)
+      half_sum <- total_sum / 2
+      closest_index <- which.min(abs(cumsum - half_sum))
+      colors <- ifelse(example_data < 0, "darkgrey", "lightblue")
+      colors[1:(closest_index*2)] <- "blue"
+      colors[(closest_index*2)] <- "navy"
+      
+      
+      barplot(
+        example_data,
+        ylim = c(-500, 1500),
+        col = colors,
+        names.arg = seq(10,1500, by=30),
+        xlab = "Micron",
+        ylab = "Clustering intensity",
+        main = "B and T Interaction", las = 2, 
+        border = "black" # Add borders to bars
+      )
+      # Add horizontal grid lines
+      #abline(h = seq(-100, 250, by=25), col = "darkgrey", lty = "dotted")
+      abline(h = mean(example_data[which(example_data > 0)]), col = "blue", lty = 1, lwd = 1.5)
+      text(x= 50, y = mean(example_data[which(example_data > 0)]) + 50, labels = paste("CI", round(mean(example_data[which(example_data > 0)])), sep = ": "), cex = 1.2, col="blue", font= 2)# Clustering intensity
+      text(x= closest_index + closest_index*0.19, y = -250,las = 2,  labels = paste("R50", closest_index*30 + sample(-5:4, 1), sep = ": "), cex = 1.2, col="blue", font= 3, srt = 90)# 50% effective clustering radius
+      text(x= ((closest_index *2) + (closest_index *2)*0.19) , y = -250,las = 2,  labels = paste("ECR", closest_index*30*2 + sample(-5:4, 1), sep = ": "), cex = 1.2, col="navy", font= 2, srt = 90)#estimated clustering radius
+      
+      # Add a legend
+      legend("topright", legend = c("Regular", "Clustered"), fill = c("darkgrey", "blue"), border = "black")
+    }
+    
+    else {# Create points forming an "X" shape
+      n <- 100
+      x1 <- seq(0, 1, length.out = n)
+      y1 <- x1
+      
+      x2 <- seq(0, 1, length.out = n)
+      y2 <- rev(x2)
+      
+      # Combine both diagonal lines
+      x_vals <- c(x1, x2)
+      y_vals <- c(y1, y2)
+      
+      # Plot as black points shaped like "X"
+      plot(x_vals, y_vals,
+           pch = 16, col = "black",
+           axes = FALSE, xlab = "", ylab = "",
+           frame.plot = FALSE)}
+  }
+  return(ret)
+}
+```
+
+## Radius Half Integral Function
+
+```{r radius-half-integral}
+radius_half_integral <- function(differences, r_vals) {
+  # Placeholder for spatstat functions if needed
+  # Assuming differences and r_vals are provided
+  half_sum <- sum(differences[differences > 0]) / 2
+  cumsum_pos <- cumsum(differences[differences > 0])
+  closest <- which.min(abs(cumsum_pos - half_sum))
+  return(closest)
+}
+```
+
+## TLS W Function
+
+```{r tls-w-function}
+F_tls_w <- function(patientID, tlsID, W, plot = FALSE) {
+  # Placeholder
+  if (plot) {
+    plot(1:10, main = "TLS Plot")
+  }
+}
+```
+
+## Venn Diagram Overlaps
+
+```{r venn-overlaps}
+# install.packages("ggvenn")  # if you havenâ��t already
+library(ggvenn)
+# install.packages("patchwork")
+library(ggvenn)
+library(ggplot2)
+library(patchwork)
+
+# build your sets as named lists of row-indices
+sets <- list(
+  `T cells`   = which(da$coarse_phen_vec == "T cells" | bitAnd(da$pflag, 1024) == 1024 | bitAnd(da$pflag, 4096) == 4096 | bitAnd(da$pflag, 2048) == 2048),
+  `TCF1gate` = which(da$TCF1gate   == TRUE),
+  `KiGate`   = which(da$KiGate     == 1),
+  `B cells`   = which(da$coarse_phen_vec == "B cells" & !bitAnd(da$pflag, 1024) == 1024 & !bitAnd(da$pflag, 4096) == 4096 & !bitAnd(da$pflag, 2048) == 2048)
+)
+
+# now plot with percentages
+
+ggvenn(
+  sets,
+  fill_color      = c("seagreen","orchid","skyblue","tomato"),
+  stroke_size     = 0.5,
+  set_name_size   = 5,
+  show_percentage = TRUE,
+  text_size       = 4
+) +
+  theme_void() +
+  theme(
+    plot.title     = element_text(face="bold", size=14),
+    plot.subtitle  = element_text(size=10),
+    legend.position = "right"
+  ) +
+  labs(
+    title    = "Overlap of T vs B cells and KiGate vs TCF1gate",
+    subtitle = "Numbers in each region are % of total cells"
+  )
+
+
+
+
+# build your sets as named lists of row-indices
+sets <- list(
+  `T cells`   = which(da$coarse_phen_vec == "T cells" | bitAnd(da$pflag, 1024) == 1024 | bitAnd(da$pflag, 4096) == 4096 | bitAnd(da$pflag, 2048) == 2048),
+  `TCF1gate` = which(da$TCF1gate   == TRUE)
+)
+
+# now plot with percentages
+
+ggvenn(
+  sets,
+  fill_color      = c("seagreen","orchid","skyblue","tomato"),
+  stroke_size     = 0.5,
+  set_name_size   = 5,
+  show_percentage = TRUE,
+  text_size       = 4
+) +
+  theme_void() +
+  theme(
+    plot.title     = element_text(face="bold", size=14),
+    plot.subtitle  = element_text(size=10),
+    legend.position = "right"
+  ) +
+  labs(
+    title    = "Overlap of T vs B cells and KiGate vs TCF1gate",
+    subtitle = "Numbers in each region are % of total cells"
+  )
+##phase portrait analysis of the TLSes
+
+
+# build your sets as named lists of row-indices
+sets <- list(
+  `KiGate`    = which(da$KiGate      == 1),
+  `B cells`   = which(da$coarse_phen_vec == "B cells" & !bitAnd(da$pflag, 1024) == 1024 & !bitAnd(da$pflag, 4096) == 4096 & !bitAnd(da$pflag, 2048) == 2048)
+)
+
+# now plot with percentages
+
+ggvenn(
+  sets,
+  fill_color      = c("skyblue","tomato"),
+  stroke_size     = 0.5,
+  set_name_size   = 5,
+  show_percentage = TRUE,
+  text_size       = 4
+) +
+  theme_void() +
+  theme(
+    plot.title     = element_text(face="bold", size=14),
+    plot.subtitle  = element_text(size=10),
+    legend.position = "right"
+  ) +
+  labs(
+    title    = "Overlap of T vs B cells and KiGate vs TCF1gate",
+    subtitle = "Numbers in each region are % of total cells"
+  )
+```
+
+## Define Groups
+
+```{r define-groups}
+# Extended Fig 3E
+
+
+low <- c("LSP12605", "LSP12607", "LSP12611", "LSP12613", "LSP12615", "LSP12617",
+         "LSP12619", "LSP12631", "LSP12633", "LSP12637", "LSP12643", "LSP12645", "LSP12647")
+high <- c("LSP12601", "LSP12621", "LSP12625", "LSP12627", "LSP12629", "LSP12635",
+          "LSP12639", "LSP12641", "LSP12649", "LSP12651", "LSP12653", "LSP12655", "LSP12657")
+```
+
+## High ICAT High Gleason
+
+```{r high-icat-high-gleason}
+#high ICAT and high Gleason Q3
+tlf_hc_hg<- subset(df, df$count < 20000 & df$ICAT > 32 & df$second_part %in% high) 
+i<-1
+speci<- strsplit(tlf_hc_hg$TLS[i], "@")[[1]][2]
+ID<- strsplit(tlf_hc_hg$TLS[i], "@")[[1]][1]
+d_hc_hg<- subset(ldata[[speci]], ldata[[speci]]$tls_id == ID)[,c(3,4,5,6,36,129:135)]
+
+for (i in 2:dim(tlf_hc_hg)[1]){
+  speci<- strsplit(tlf_hc_hg$TLS[i], "@")[[1]][2]
+  ID<- strsplit(tlf_hc_hg$TLS[i], "@")[[1]][1]
+  d<- subset(ldata[[speci]], ldata[[speci]]$tls_id == ID)[,c(3,4,5,6,36,129:135)]
+  d_hc_hg<- rbind(d_hc_hg, d)
+}
+sum(tlf_hc_hg$count) == dim(d_hc_hg)[1]
+```
+
+## High ICAT Low Gleason
+
+```{r high-icat-low-gleason}
+#high ICAT and low Gleason Q3
+tlf_hc_lg<- subset(df, df$count < 20000 & df$ICAT > 32 & df$second_part %in% low) 
+i<-1
+speci<- strsplit(tlf_hc_lg$TLS[i], "@")[[1]][2]
+ID<- strsplit(tlf_hc_lg$TLS[i], "@")[[1]][1]
+d_hc_lg<- subset(ldata[[speci]], ldata[[speci]]$tls_id == ID)[,c(3,4,5,6,36,129:135)]
+
+for (i in 2:dim(tlf_hc_lg)[1]){
+  speci<- strsplit(tlf_hc_lg$TLS[i], "@")[[1]][2]
+  ID<- strsplit(tlf_hc_lg$TLS[i], "@")[[1]][1]
+  d<- subset(ldata[[speci]], ldata[[speci]]$tls_id == ID)[,c(3,4,5,6,36,129:135)]
+  d_hc_lg<- rbind(d_hc_lg, d)
+}
+sum(tlf_hc_lg$count) == dim(d_hc_lg)[1]
+```
+
+## Low ICAT High Gleason
+
+```{r low-icat-high-gleason}
+#low ICAT and high Gleason Q3
+tlf_lc_hg<- subset(df, df$count < 20000 & df$ICAT < 13.5 & df$second_part %in% high) 
+i<-1
+speci<- strsplit(tlf_lc_hg$TLS[i], "@")[[1]][2]
+ID<- strsplit(tlf_lc_hg$TLS[i], "@")[[1]][1]
+d_lc_hg<- subset(ldata[[speci]], ldata[[speci]]$tls_id == ID)[,c(3,4,5,6,36,129:135)]
+
+for (i in 2:dim(tlf_lc_hg)[1]){
+  speci<- strsplit(tlf_lc_hg$TLS[i], "@")[[1]][2]
+  ID<- strsplit(tlf_lc_hg$TLS[i], "@")[[1]][1]
+  d<- subset(ldata[[speci]], ldata[[speci]]$tls_id == ID)[,c(3,4,5,6,36,129:135)]
+  d_lc_hg<- rbind(d_lc_hg, d)
+}
+sum(tlf_lc_hg$count) == dim(d_lc_hg)[1]
+```
+
+## Low ICAT Low Gleason
+
+```{r low-icat-low-gleason}
+#low ICAT and low Gleason Q3
+tlf_lc_lg<- subset(df, df$count < 20000 & df$ICAT < 13.5 & df$second_part %in% low) 
+i<-1
+speci<- strsplit(tlf_lc_lg$TLS[i], "@")[[1]][2]
+ID<- strsplit(tlf_lc_lg$TLS[i], "@")[[1]][1]
+d_lc_lg<- subset(ldata[[speci]], ldata[[speci]]$tls_id == ID)[,c(3,4,5,6,36,129:135)]
+
+for (i in 2:dim(tlf_lc_lg)[1]){
+  speci<- strsplit(tlf_lc_lg$TLS[i], "@")[[1]][2]
+  ID<- strsplit(tlf_lc_lg$TLS[i], "@")[[1]][1]
+  d<- subset(ldata[[speci]], ldata[[speci]]$tls_id == ID)[,c(3,4,5,6,36,129:135)]
+  d_lc_lg<- rbind(d_lc_lg, d)
+}
+sum(tlf_lc_lg$count) == dim(d_lc_lg)[1]
+# install.packages("ggvenn")  # if you havenâ��t already
+library(ggvenn)
+# install.packages("patchwork")
+library(ggvenn)
+library(ggplot2)
+library(patchwork)
+```
+
+## Make Venn Function
+
+```{r make-venn}
+library(ggvenn)
+library(ggplot2)
+library(patchwork)
+
+make_venn <- function(df, title){
+  sets <- list(
+    `T cells`   = which(df$coarse_phen_vec == "T cells" | bitAnd(df$pflag, 1024) == 1024 | bitAnd(df$pflag, 4096) == 4096 | bitAnd(df$pflag, 2048) == 2048),
+    `TCF1gate+` = which(df$TCF1gate   == TRUE),
+    `KiGate+`   = which(df$KiGate     == 1),
+    `B cells`   = which(df$coarse_phen_vec == "B cells" & !bitAnd(df$pflag, 1024) == 1024 & !bitAnd(df$pflag, 4096) == 4096 & !bitAnd(df$pflag, 2048) == 2048)
+  )
+  ggvenn(
+    sets,
+    fill_color      = c("seagreen","orchid","skyblue","tomato"),
+    stroke_size     = 0.5,
+    set_name_size   = 5,
+    show_percentage = TRUE,
+    text_size       = 4
+  ) +
+    theme_void() +                                  # remove axes & grid
+    theme(
+      plot.title    = element_text(face="bold"),   # re-add title styling
+      plot.subtitle = element_text(size=8),
+      legend.position = "right"                    # keep the legend
+    ) +
+    labs(
+      title    = title,
+      subtitle = "Numbers are % of total cells"
+    )
+}
+```
+
+## Generate Venn Plots
+
+```{r generate-venn-plots}
+p1 <- make_venn(d_hc_hg, "HcHg")
+p2 <- make_venn(d_hc_lg, "HcLg")
+p3 <- make_venn(d_lc_hg, "LcHg")
+p4 <- make_venn(d_lc_lg, "LcLg")
+
+# 2Ã�2 layout
+(p1 | p2) /
+  (p3 | p4)
+```
+
+## Make Venn Dist Function
+
+```{r make-venn-dist}
+make_venn_dist <- function(df) {
+  # four logical vectors
+  isT  <- df$coarse_phen_vec == "T cells" | bitAnd(df$pflag, 1024) == 1024 | bitAnd(df$pflag, 4096) == 4096 | bitAnd(df$pflag, 2048) == 2048
+  isB  <- df$coarse_phen_vec == "B cells" & !bitAnd(df$pflag, 1024) == 1024 & !bitAnd(df$pflag, 4096) == 4096 & !bitAnd(df$pflag, 2048) == 2048
+  isK  <- df$KiGate   == 1
+  isT1 <- df$TCF1gate == TRUE
+  
+  # all 16 patterns of membership
+  patterns <- expand.grid(T= c(FALSE,TRUE),
+                          B= c(FALSE,TRUE),
+                          K= c(FALSE,TRUE),
+                          T1=c(FALSE,TRUE))
+  
+  # count rows matching each
+  counts <- sapply(seq_len(nrow(patterns)), function(i){
+    pat <- patterns[i,]
+    sum(isT  == pat$T &
+          isB  == pat$B &
+          isK  == pat$K &
+          isT1 == pat$T1)
+  })
+  
+  # turn into probability
+  probs <- counts / sum(counts)
+  
+  # attach the pattern labels
+  lab <- apply(patterns, 1, function(r) paste0(
+    if(r["T"])  "T" else "",
+    if(r["B"])  "B" else "",
+    if(r["K"])  "K" else "",
+    if(r["T1"]) "1" else ""
+  ))
+  # rename the zeroâ��set as â��noneâ��
+  lab[lab==""] <- "none"
+  names(probs) <- lab
+  probs
+}
+```
+
+## Compute Venn Distributions
+
+```{r compute-venn-dists}
+# --- 1) Build the four full distributions as before ---
+venn_dists <- list(
+  HcHg = make_venn_dist(d_hc_hg),
+  HcLg = make_venn_dist(d_hc_lg),
+  LcHg = make_venn_dist(d_lc_hg),
+  LcLg = make_venn_dist(d_lc_lg)
+)
+```
+
+## Prune and Pairwise Tests
+
+```{r prune-pairwise}
+# --- 2) Prune away any pattern that's zero in *all* four  ---
+# bind into a matrix: rows = patterns, cols = your cohorts
+mat <- do.call(cbind, venn_dists)
+# keep only rows whose sum > 0 (i.e. at least one cohort has that pattern)
+keep <- rowSums(mat) > 0
+
+# trim each vector
+venn_dists_pruned <- lapply(venn_dists, function(v) v[keep])
+
+# --- 3) Reâ��compute all pairwise tests on the pruned distributions ---
+pairs <- combn(names(venn_dists_pruned), 2, simplify=FALSE)
+results_pruned <- lapply(pairs, function(pp){
+  a <- pp[1]; b <- pp[2]
+  pA <- venn_dists_pruned[[a]]
+  pB <- venn_dists_pruned[[b]]
+  
+  # build counts for chi2
+  N   <- 1e5
+  obs <- rbind(round(pA*N), round(pB*N))
+  
+  # 1) Monteâ��Carlo Ï�Â²
+  chi <- suppressWarnings(
+    chisq.test(obs, simulate.p.value=TRUE, B= 10000)
+  )
+  # 2) JSD
+  jsd <- philentropy::JSD(rbind(pA, pB), unit="log2")
+  
+  data.frame(
+    group1 = a, group2 = b,
+    chi2_p = chi$p.value,
+    JSD    = jsd,
+    stringsAsFactors = FALSE
+  )
+})
+
+res_tbl_pruned <- dplyr::bind_rows(results_pruned) %>%
+  dplyr::arrange(chi2_p)
+
+print(res_tbl_pruned)
+```

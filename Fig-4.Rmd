@@ -1,0 +1,419 @@
+---
+title: "Figure 4 Analysis"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+date: "2025-09-04"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load Libraries and Set Paths
+
+```{r load-libraries-paths}
+#filepath <- "/Users/aliamiryousefi/Desktop/LSP12601.ptrdim.cys"
+library(data.table) ##install again
+library(googlesheets4)
+library(vioplot)
+
+##Fig 4 
+
+mpath<-"/Users/aliamiryousefi/Desktop/cyf_files2/"
+files<- list.files(mpath)
+```
+
+## Load Data into List
+
+```{r load-data}
+ldata<- list()
+for (i in 1:length(files)){
+  #names(ldata)[i]<- strsplit(files[i], "\\.p")[[1]][1]
+  ldata[[i]]<- fread(cmd=paste("/Users/aliamiryousefi/github/cysift/src/cysift view -R", paste(mpath, files[i], sep="")))
+}
+for (i in 1:length(files)){names(ldata)[i]<- strsplit(files[i], "\\.p")[[1]][1]}
+
+#dt<- fread(cmd=paste("/Users/aliamiryousefi/github/cysift/src/cysift view -R", filepath)) #restarting the R, the code is dt<- fread(cmd=paste("cysift view -R", filepath))
+#the key thing is that the cysift only take the binary input and only the binary input of the cysift format can be read into the cysift
+```
+
+## Save and Load Data
+
+```{r save-load-data}
+#then save the list data
+
+save(ldata, file = "listdatacysift2_Phen_Ki.RData")
+#and load it after that.
+
+
+#load("/Users/aliamiryousefi/listdatacysift2_Phen_Ki.RData")
+
+# This includes all the data in one file. 
+# the ops package could be used to decode the binary data into base ten for the gating
+
+
+## for example the pflag is (xxx)_10 but the gating in 64 bit case is (yyy)_2 for all the 
+#fixed-position channels, if a channel is not gated its always zero. 
+#install.packages("bitops")
+library(bitops)
+```
+
+## Binary Conversion Functions
+
+```{r binary-functions}
+#the following returns the binary of the base ten value
+binary <- function(x) {
+  i <- 0
+  string <- numeric(64)
+  while(x > 0) {
+    string[64 - i] <- x %% 2
+    x <- x %/% 2
+    i <- i + 1 
+  }
+  first <- match(1, string)
+  string[first:64]
+}
+
+text<- try(system("/Users/aliamiryousefi/github/cysift/src/cysift view -H ~/Documents/Collaborative_Projects/Jeremiah/Primary_prostate_CyCIF_TME_manuscript_2023/cys_files/LSP12601.ptrdim.cys", intern = TRUE))
+MA<- text[grep("@MA", text)]
+mar<- gsub("\tIN", "", gsub("@MA\tID:", "", MA))
+markers<- mar
+for (i in 1:length(mar)){
+  markers[i]<- strsplit(mar[i], ":")[[1]][1]
+} 
+
+markers<- markers[length(markers):1]
+
+#then we get the adaptive binary length of the vectors
+
+ad_binary <- function(x) {
+  i <- 0
+  string <- numeric(64)
+  while(x > 0) {
+    string[64 - i] <- x %% 2
+    x <- x %/% 2
+    i <- i + 1 
+  }
+  first <- match(1, string)
+  string[(65-length(markers)):64]
+}
+
+##now the markers and the ad_binary are parallel to each other!
+```
+
+## Read Clinical Data
+
+```{r read-clinical}
+#sheet<- as.data.table(googlesheets4::read_sheet("https://docs.google.com/spreadsheets/d/1pXzLJkaX2wkJI_uOdgXLaapg1CJlo459G84FRY1pJYI/edit?pli=1#gid=0", sheet="Sheet1"))
+#sheet<- as.data.table(googlesheets4::read_sheet("https://docs.google.com/spreadsheets/d/1pXzLJkaX2wkJI_uOdgXLaapg1CJlo459G84FRY1pJYI/edit?pli=1#gid=1", sheet="Sheet1"))
+
+
+sheet<- read.csv("/Users/aliamiryousefi/Desktop/GU-material/Prostate SPORE - Sheet1.csv")
+
+
+
+high<- subset(sheet$CyCIF.Slide.ID, sheet$Gleason.HighLow=="High")
+#removing the ones without any TLS
+high<- high[-3]
+
+low<- subset(sheet$CyCIF.Slide.ID, sheet$Gleason.HighLow=="Low")
+low<- low[-c(1,4)]
+```
+
+## Generate TLS Plots PDF
+
+```{r tls-plots-pdf}
+# for each of ther TLS numbers (different ones) add points for to the main plot
+#j is the range for patinets
+
+#pdf(file = "a-numbered-TLS-compact2-unicolour.pdf", width=10.5, height=10.5)
+par(mfrow = c(4, 4), mar = c(1, 1, 1, 1)) #mar = c(bottom, left, top, right)  the default is c(5.1, 4.1, 4.1, 2.1)
+#13000 is the max range of the points
+for (j in 17:29){
+  f<- ldata[[j]]
+  ff<-f
+  so<-sample(dim(f)[1], round(dim(f)[1]/50))
+  f<- f[so,]
+  if (j == 15){f<- ldata[[j]]}
+  name<- names(ldata)[j]
+  determine_color <- function(nam) {
+    if (nam %in% high) {
+      return("#7570b3")
+    } else if (nam %in% low) {
+      return("#1b9e77")
+    } else {
+      return("grey")
+    }
+  }
+  main_color <- determine_color(name)
+  ltls<- length(unique(ff$tls_id))-1
+  uni<- unique(f$tls_id)[-1]
+  a<- max(ff$x); b<- max(ff$y)
+  par(mar = c((10.66-(b/1500)), (10.66-(a/1500)), (10.66-(b/1500)), (10.66-(a/1500))))
+  plot(f$x, f$y, pch=19, cex=0.01, cex.axis=1,  # Axis tick labels larger
+       cex.lab=1,   # Axis title labels larger
+       cex.main=1.4,    # Main title larger 
+       col="lightgrey", main = paste(names(ldata)[[j]]), xlab = paste("TLS counts", length(uni), sep = "="), ylab = "", ylim = range(f$y), xlim =range(f$x), col.main = main_color 
+       #,panel.first = grid()
+  )  
+  if (sum(bitAnd(ff$cflag, 8) == 8) > 0){
+    ss<- subset(ff, bitAnd(ff$cflag, 8) == 8)
+    s1<-sample(dim(ss)[1], round(dim(ss)[1]/50))
+    ss<- ss[s1, ]
+    points(ss$x, ss$y, col="lightblue", pch=19, cex=0.01)
+  }
+  for (i in 1:ltls){
+    s<- subset(ff, ff$tls_id==uni[i])
+    points(s$x, s$y, col="orange", pch=19, cex=0.01)#rainbow(ltls)[i], pch=19, cex=0.01)
+    if (dim(s)[1]>0){text(s$x[1], s$y[1], label = uni[i], cex = 0.7)}
+  }
+  
+}
+dev.off()
+```
+
+## Calculate TLS Counts and Means
+
+```{r tls-counts-means}
+###number of cells per IC
+
+h.ntls<- numeric(length(high))
+c<- 1
+for (i in high){l<- ldata[[which(names(ldata)== i )]]
+h.ntls[c]<- length(unique(l$tls_id))
+c<- c+1
+}
+h.ntls<- h.ntls-1
+
+l.ntls<- numeric(length(low))
+c<- 1
+for (i in low){l<- ldata[[which(names(ldata)== i )]]
+l.ntls[c]<- length(unique(l$tls_id))
+c<- c+1
+}
+l.ntls<- l.ntls-1
+
+
+
+h.mtls<- numeric(length(high))
+c<- 1
+for (i in high){l<- ldata[[which(names(ldata)== i )]]
+mean.vector<- numeric(h.ntls[c])
+cc<-1
+for (j in unique(l$tls_id)[-which(unique(l$tls_id)==0)]){
+  mean.vector[cc]<- sum(l$tls_id==j)
+  cc<- 1 + cc
+}
+h.mtls[c]<- mean(mean.vector)
+c<- c+1
+}
+
+l.mtls<- numeric(length(low))
+c<- 1
+for (i in low){l<- ldata[[which(names(ldata)== i )]]
+mean.vector<- numeric(l.ntls[c])
+cc<-1
+for (j in unique(l$tls_id)[-which(unique(l$tls_id)==0)]){
+  mean.vector[cc]<- sum(l$tls_id==j)
+  cc<- 1 + cc
+}
+l.mtls[c]<- mean(mean.vector)
+c<- c+1
+}
+```
+
+## Undifferentiated TLS Plot
+
+```{r undifferentiated-tls-plot}
+###the undifferntiated TLS plot for gleason high and low
+h.size<- numeric(sum(h.ntls))
+l.size<- numeric(sum(l.ntls))
+
+cc<-1
+for (i in low){l<- ldata[[which(names(ldata)== i )]]
+for (j in unique(l$tls_id)[-which(unique(l$tls_id)==0)]){
+  l.size[cc]<- sum(l$tls_id==j)
+  cc<- 1 + cc
+}
+}
+cc<-1
+for (i in high){l<- ldata[[which(names(ldata)== i )]]
+for (j in unique(l$tls_id)[-which(unique(l$tls_id)==0)]){
+  h.size[cc]<- sum(l$tls_id==j)
+  cc<- 1 + cc
+}
+}
+gleason <- rep(c("High", "Low"), times = c(length(h.size), length(l.size)))
+value <- c(h.size, l.size)
+data <- data.frame(Gleason = gleason, Value = value)
+
+# Create segment assignments based on h.ntls and l.ntls
+h.groups <- rep(seq_along(h.ntls), times = h.ntls)
+l.groups <- rep(seq_along(l.ntls), times = l.ntls)
+
+# Assign segment labels
+data$Segment <- c(h.groups, l.groups)
+
+# Convert Segment to factor for coloring
+data$Segment <- as.factor(data$Segment)
+
+# Remove outliers using the IQR method
+remove_outliers <- function(df, column) {
+  Q1 <- quantile(df[[column]], 0.1)
+  Q3 <- quantile(df[[column]], 0.78)
+  IQR_value <- Q3 - Q1
+  
+  # Define lower and upper bounds
+  lower_bound <- Q1 - 1.5 * IQR_value
+  upper_bound <- Q3 + 1.5 * IQR_value
+  
+  # Filter data within the bounds
+  df_filtered <- df[df[[column]] >= lower_bound & df[[column]] <= upper_bound, ]
+  return(df_filtered)
+}
+
+# Remove outliers from the Value column
+data_cleaned <- remove_outliers(data, "Value")
+
+# Perform t-test on cleaned data
+t_test_result <- t.test(Value ~ Gleason, data = data_cleaned)
+
+# Define distinct colors for segments
+segment_colors <- scales::hue_pal()(length(unique(data_cleaned$Segment)))
+
+# Create violin plot without outliers
+p <- ggplot(data_cleaned, aes(x = Gleason, y = Value, fill = Gleason)) +
+  geom_violin(trim = FALSE, alpha = 0.5) +
+  geom_jitter(aes(color = Segment), width = 0.2, alpha = 0.8, size = 2) +  # Color by segment
+  geom_boxplot(width = 0.1, outlier.shape = NA) +  # Suppress outliers in boxplot
+  labs(title = "IC Size", y = "Number of cells per IC") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face="bold"),
+        legend.position = "none") +  # Remove the legend
+  ylim(0, max(data_cleaned$Value)) +  # Adjust limits based on cleaned data
+  # Add line at y = 3500
+  geom_segment(x = 1.1, xend = 1.9, y = 3500, yend = 3500, linetype = "dashed", color = "blue") +
+  # Add p-value text
+  annotate("text", x = 1.5, y = 3500, label = paste("p-value =", 
+                                                    formatC(t_test_result$p.value, digits = 3, format = "f")),
+           hjust = 0.5, vjust = -1, color = ifelse(t_test_result$p.value < 0.05, "red", "black")) +
+  # Specify colors for each segment
+  scale_color_manual(values = segment_colors) +
+  scale_fill_manual(values = c("High" = "#7570b3", "Low" = "#1b9e77"))
+
+# Display the plot
+print(p)
+```
+
+## Spatial Contour Function
+
+```{r spatial-contour}
+##contour plot for corss markers
+
+#CD31<- 4194304
+
+SpaCont <- function(pID, res=0.9){
+  d <- ldata[[pID]]
+  cont <- d[, c(3, 4, 5, 6, 13, 18, 129)]
+  
+  # Load necessary libraries
+  library(ggplot2)
+  library(dplyr)
+  library(bitops)
+  
+  # Define High and Low groups
+  low <- c("LSP12605", "LSP12607", "LSP12611", "LSP12613", "LSP12615", "LSP12617", 
+           "LSP12619", "LSP12631", "LSP12633", "LSP12637", "LSP12643", "LSP12645", "LSP12647")
+  
+  high <- c("LSP12601", "LSP12621", "LSP12625", "LSP12627", "LSP12629", "LSP12635", 
+            "LSP12639", "LSP12641", "LSP12649", "LSP12651", "LSP12653", "LSP12655", "LSP12657")
+  
+  # Set title color based on pID category
+  title_color <- ifelse(pID %in% low, "#1b9e77", ifelse(pID %in% high, "#7570b3", "black"))
+  
+  # Sample the data (without replacement)
+  set.seed(123)
+  cont_sample <- cont %>%
+    sample_n(min(nrow(cont), 200000 * res), replace = FALSE)
+  
+  # Create subsets based on conditions
+  cont_background <- subset(cont_sample, bitAnd(cflag, 8) != 8)  # Background (Stromal)
+  cont_highlight <- subset(cont_sample, bitAnd(cflag, 8) == 8)  # Tumor overlay
+  cont_t8cells <- subset(cont_sample, phen_vec == "CD8 T cells")  # CD8 T cells
+  cont_bcells <- subset(cont_sample, phen_vec == "B cells")  # B cells
+  cont_t4cells <- subset(cont_sample, phen_vec == "CD4 T cells")  # CD4 T cells
+  cont_CD31 <- subset(cont_sample, bitAnd(pflag, 4194304) == 4194304)  # CD31+ cells
+  
+  # Add a label column to assign legend categories
+  cont_background$Type <- "Stromal"
+  cont_highlight$Type <- "Tumor"
+  cont_t8cells$Type <- "CD8 T cells"
+  cont_t4cells$Type <- "CD4 T cells"
+  cont_bcells$Type <- "B cells"
+  cont_CD31$Type <- "CD31+"
+  
+  # Flip the y-coordinates to adjust to image space
+  y_min <- min(cont_sample$y)
+  y_max <- max(cont_sample$y)
+  
+  flip_y <- function(df) {
+    df$y <- y_max - df$y
+    return(df)
+  }
+  
+  cont_background <- flip_y(cont_background)
+  cont_highlight <- flip_y(cont_highlight)
+  cont_t8cells <- flip_y(cont_t8cells)
+  cont_t4cells <- flip_y(cont_t4cells)
+  cont_bcells <- flip_y(cont_bcells)
+  cont_CD31 <- flip_y(cont_CD31)
+  
+  # Combine data
+  cont_all <- bind_rows(cont_background, cont_highlight)
+  
+  # Create the plot with legend
+  contour_plot <- ggplot() +
+    # Plot background points (Stromal and Tumor) with transparency
+    geom_point(data = cont_all, aes(x = x, y = y, color = Type), alpha = 0.3, size = 0.3) +
+    #geom_point(data = cont_CD31, aes(x = x, y = y, color = Type), alpha = 0.5, size = 0.5) +
+    
+    # Overlay finer contour lines for cell types
+    geom_density_2d(data = cont_bcells, aes(x = x, y = y, linetype = "B cells"), color = "red", bins = 20, h = c(1000, 1000), alpha = 0.65) +
+    geom_density_2d(data = cont_t8cells, aes(x = x, y = y, linetype = "CD8 T cells"), color = "green", bins = 20, h = c(1000, 1000), alpha = 0.9) +
+    geom_density_2d(data = cont_t4cells, aes(x = x, y = y, linetype = "CD4 T cells"), color = "blue", bins = 20, h = c(1000, 1000), alpha = 0.6) +
+    
+    # Manually set colors for categories
+    scale_color_manual(
+      values = c("Stromal" = "lightgrey", "Tumor" = "grey57", "CD31+" = "maroon4"),
+      name = "Cell Type"
+    ) +
+    
+    # Adjust legend for line types
+    scale_linetype_manual(
+      values = c("B cells" = "solid", "CD4 T cells" = "solid", "CD8 T cells" = "solid"),
+      name = "Contour Type"
+    ) +
+    
+    # Set y-axis limits
+    scale_y_continuous(limits = c(0, y_max)) +
+    
+    # Theme and labels
+    theme_minimal() +
+    labs(
+      title = paste(pID),
+      x = "x",
+      y = "y"
+    ) +
+    theme(
+      plot.title = element_text(face = "bold", hjust = 0.5, size = 18, color = title_color),  # Set dynamic color
+      axis.title = element_text(size = 16),
+      axis.text = element_text(size = 14),
+      legend.position = "right"  # Place the legend to the right
+    )
+  
+  # Display the plot
+  print(contour_plot)
+}
+```

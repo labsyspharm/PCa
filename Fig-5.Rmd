@@ -1,0 +1,588 @@
+---
+title: "Figure 5 Analysis"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+date: "2025-09-04"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## TLS Window Function
+
+```{r tls-window-function}
+F_tls_w <- function(patientID, tlsID, W, draw = FALSE) {
+  d  <- ldata[[patientID]]
+  df <- subset(d, tls_id == tlsID)
+  
+  ## centre of TLS window
+  centre <- c(mean(range(df$x)), mean(range(df$y)))
+  
+  ## window filter
+  keep  <- with(d,
+                x > centre[1] - W & x < centre[1] + W &
+                  y > centre[2] - W & y < centre[2] + W)
+  d_ret <- d[keep, ]
+  
+  if (draw) {
+    
+    ## ------------- background: all cells -------------
+    plot(d_ret$x, d_ret$y,
+         xlab = "X-coordinate (µm)",
+         ylab = "Y-coordinate (µm)",
+         main = paste(tlsID, patientID, sep = "@"),
+         pch  = 16,                                 # filled circle
+         cex  = 0.8,                                # a bit larger than "."
+         col  = adjustcolor("grey60", alpha.f = 0.5))
+    
+    ## ------------- B- and T-cells with black outline -------------
+    idx_B <- bitwAnd(d_ret$pflag, 64) == 64
+    idx_T <- d_ret$coarse_phen_vec == "T cells"
+    
+    points(d_ret$x[idx_B], d_ret$y[idx_B],
+           pch = 21, bg = adjustcolor("red",   0.9),
+           col = "black", cex = 1.3, lwd = 0.4)
+    
+    points(d_ret$x[idx_T], d_ret$y[idx_T],
+           pch = 21, bg = adjustcolor("green", 0.9),
+           col = "black", cex = 1.3, lwd = 0.4)
+  }
+  
+  invisible(d_ret)
+}
+```
+
+## Spatial BT Function
+
+```{r spatial-bt-function}
+SpaBT <- function(pID) {
+  t <- subset(ldata[[pID]], !ldata[[pID]]$tcell_dbscan %in% c(-1))  
+  
+  # Load required libraries
+  library(ggplot2)
+  library(bitops)  # For bitwise operations
+  
+  # Convert tcell_dbscan to numeric (if it's a factor)
+  t$tcell_dbscan <- as.numeric(as.character(t$tcell_dbscan))
+  
+  # Identify rows where tcell_dbscan == -999 (Stroma candidates)
+  stroma_rows <- which(t$tcell_dbscan %in% c(-1, -999))
+  
+  # Randomly sample a maximum of 200,000 Stroma rows
+  if (length(stroma_rows) > 200000) {
+    sampled_stroma_rows <- sample(stroma_rows, 200000)  
+    keep_rows <- setdiff(1:nrow(t), stroma_rows)  
+    keep_rows <- c(keep_rows, sampled_stroma_rows)  
+    t <- t[keep_rows, ]  
+  }
+  
+  # Assign meaningful group labels
+  t$cluster_group <- ifelse(t$tcell_dbscan >= 1, "Clustered", 
+                            ifelse(t$tcell_dbscan == -1, "T Cells",
+                                   ifelse(t$tcell_dbscan == 0, "B Clusters",
+                                          ifelse(t$tcell_dbscan == -999 & bitAnd(t$cflag, 8) == 8, "Tumor",
+                                                 ifelse(t$tcell_dbscan == -999, "Stroma", "other")))))
+  
+  # Assign randomly "Clustered" points to "CD8 T" or "CD4 T"
+  set.seed(42)  
+  t$cluster_group[t$cluster_group == "Clustered"] <- sample(c("CD8 T", "CD4 T"), 
+                                                            size = sum(t$cluster_group == "Clustered"), 
+                                                            replace = TRUE)
+  
+  # Define color mappings
+  cluster_colors <- c("Stroma" = "lightgrey", 
+                      "Tumor" = "grey57", 
+                      "B Clusters" = "red",
+                      "T Cells" = "orange",
+                      "CD4 T" = "blue", 
+                      "CD8 T" = "green")  
+  
+  # Set factor levels for correct plotting order
+  priority_groups <- c("Stroma", "Tumor", "B Clusters", "T Cells")
+  random_cd4_cd8 <- sample(c("CD4 T", "CD8 T"))  
+  
+  t$cluster_group <- factor(t$cluster_group, levels = c(priority_groups, random_cd4_cd8))
+  
+  # Reorder the data by cluster priority
+  t <- t[order(match(t$cluster_group, c(priority_groups, random_cd4_cd8))), ]
+  
+  # Define High and Low groups
+  low <- c("LSP12605", "LSP12607", "LSP12611", "LSP12613", "LSP12615", "LSP12617", 
+           "LSP12619", "LSP12631", "LSP12633", "LSP12637", "LSP12643", "LSP12645", "LSP12647")
+  
+  high <- c("LSP12601", "LSP12621", "LSP12625", "LSP12627", "LSP12629", "LSP12635", 
+            "LSP12639", "LSP12641", "LSP12649", "LSP12651", "LSP12653", "LSP12655", "LSP12657")
+  
+  # Construct title with formatting
+  title_color <- if (pID %in% high) "#7570B3" else if (pID %in% low) "#1B9E77" else "black"
+  title_text <- paste0("IC and TIC <b style='color:", title_color, "'>", pID, "</b>")
+  
+  # Reverse y-values outside ggplot
+  t$y <- max(t$y) - t$y
+  
+  # Now plot with standard y-axis
+  ggplot(t, aes(x = x, y = y, color = cluster_group)) +
+    geom_point(size = 0.3, alpha = 0.3) +  
+    scale_color_manual(values = cluster_colors) +  
+    theme_minimal() +
+    scale_y_continuous(limits = c(0, max(t$y))) +  # Ensure the axis runs from 0 to max
+    labs(title = title_text, color = "Cluster Group") +
+    theme(plot.title = ggtext::element_markdown())  # Enables formatted title
+}
+```
+
+## Radius Half Integral Function
+
+```{r radius-half-integral}
+radius_half_integral <- function(differences, x_vals = NULL) {
+  # Only use positive values
+  values_pos <- differences[na.omit(differences) > 0]
+  
+  # Create x-values if not provided (assume unit spacing)
+  if (is.null(x_vals)) {
+    x_vals <- seq_along(values_pos)
+  } else {
+    x_vals <- x_vals[differences > 0]
+  }
+  
+  # Compute cumulative sum
+  cumulative_sum <- cumsum(values_pos)
+  total_sum <- cumulative_sum[length(cumulative_sum)]
+  half_sum <- total_sum / 2
+  
+  # Find the interval where the half point lies
+  idx <- which(cumulative_sum >= half_sum)[1]
+  
+  if (idx == 1 || is.na(idx)) {
+    return(x_vals[1])
+  }
+  
+  # Interpolate within the interval [idx-1, idx]
+  x0 <- x_vals[idx - 1]
+  x1 <- x_vals[idx]
+  y0 <- cumulative_sum[idx - 1]
+  y1 <- cumulative_sum[idx]
+  
+  x_half <- x0 + (half_sum - y0) * (x1 - x0) / (y1 - y0)
+  return(x_half)
+}
+```
+
+## Immune CRUSE Function
+
+```{r immune-cruse-function}
+imm.cr <- function(ws, LSP, index, phen, fig = TRUE, creep = 1) {
+  # Window size (ws) in micron, LSP identifies in the list of ldata object,
+  # index to be calculated, phenotype for the indexing e.g B cells (reading off the coarse_phen_vec)
+  L.models<- list()
+  pws <- ws / 0.325 # pixel window size
+  d <- ldata[[LSP]]
+  xstart <- 1
+  ystart <- 1
+  if (phen %in% c("T cells", "B cells")){
+    if (fig==TRUE){
+      a<- max(d$x); b<- max(d$y)
+      par(mar = c((10.66-(b/1500)), (10.66-(a/1500)), (10.66-(b/1500)), (10.66-(a/1500))))
+      plot(d$x, d$y, pch=19, cex=0.01, cex.axis=1,  # Axis tick labels larger
+           cex.lab=1,   # Axis title labels larger
+           cex.main=1.4,    # Main title larger 
+           col="lightgrey", main = LSP, xlab = paste("Window Size", ws, sep = "="), ylab = "", ylim = range(d$y), xlim =range(d$x), col.main = "navy"
+           #,panel.first = grid()
+      )  
+      if (sum(bitAnd(d$cflag, 8) == 8) > 0){
+        ss<- subset(d, bitAnd(d$cflag, 8) == 8)
+        #s1<-sample(dim(ss)[1], round(dim(ss)[1]/50))
+        #ss<- ss[s1, ]
+        points(ss$x, ss$y, col=adjustcolor("grey57", alpha.f = 0.2), pch=19, cex=0.005)
+      }
+      if (sum(d$coarse_phen_vec == phen) > 0){
+        if (phen == "T cells"){co<- "green"}
+        if (phen == "B cells"){co<- "red"}
+        ss<- subset(d, d$coarse_phen_vec == phen)
+        #s1<-sample(dim(ss)[1], round(dim(ss)[1]/4))
+        #ss<- ss[s1, ]
+        points(ss$x, ss$y, col=adjustcolor(co, alpha.f = 0.4), pch=19, cex=0.005)
+      }
+      for (i in 0:ceiling(max(d$y)/pws)){abline(h = ystart + pws * i, col = adjustcolor("navy", alpha.f = 0.5), lty = 2, lwd = 1.5)}
+      for (i in 0:ceiling(max(d$y)/pws)){abline(h = ystart + pws * i + pws/2, col = adjustcolor("darkolivegreen", alpha.f = 0.5), lty = 3, lwd = 1)}
+      for (j in 0:ceiling(max(d$x) / pws)){abline(v = xstart + pws * j, col = adjustcolor("navy", alpha.f = 0.5), lty = 2, lwd = 1.5)}
+    }
+    
+    ny <- ceiling(max(d$y) / pws)
+    nx <- ceiling(max(d$x) / pws)
+    index.holder <- matrix(0, ny, nx)
+    xstart <- 1
+    ystart <- 1
+    
+    for (i in 1:ny) {
+      for (j in 1:nx) {
+        xend <- xstart + pws
+        yend <- ystart + pws
+        
+        # Filter data for the current window
+        dff <- subset(d, x < xend & x >= xstart & y < yend & y >= ystart & coarse_phen_vec == phen)
+        
+        # Check if there are at least 10 points
+        if (nrow(dff) > 10) {
+          
+          # Create the point pattern
+          ppp <- as.ppp(dff[, c("x", "y")], W = owin(c(xstart, xend), c(ystart, yend)))
+          
+          # Set radius values
+          r_vals <- seq(0, pws, by = 10)
+          
+          # Compute the Lest function
+          L <- Lest(ppp, r = r_vals[-length(r_vals)])
+          
+          # Compute the index holder
+          index.holder[i, j] <- mean(L$border - L$theo, na.rm = TRUE)
+          
+          # Store the L model
+          L.models[[(i - 1) * nx + j]] <- L
+          
+          # Optionally plot the model
+          if (fig) {
+            # Plot the L model with line color based on index value
+            line_color <- ifelse(mean(L$border - L$theo, na.rm = TRUE) > 0, "red", "blue")
+            plot(L, main = paste("Window", (i-1)*nx + j), col = line_color)
+          }
+        } else {
+          # If fewer than 10 points, set index to NA or 0
+          index.holder[i, j] <- NA  # or 0, depending on your needs
+        }
+        
+        # Update xstart for the next column
+        xstart <- xstart + pws * creep
+      }
+      
+      # Reset xstart and update ystart for the next row
+      xstart <- 1
+      ystart <- ystart + pws * creep
+    }
+    
+    # Return the index matrix and L models
+    return(list(index.holder = index.holder, L.models = L.models))
+  }
+}
+```
+
+## Extend Ylim Function
+
+```{r extend-ylim}
+extend_ylim <- function(vals, buffer = 0.1) {
+  min_val <- min(vals, na.rm = TRUE)
+  max_val <- max(vals, na.rm = TRUE)
+  range_val <- max_val - min_val
+  c(min_val - buffer * range_val, max_val + buffer * range_val)
+}
+```
+
+## Plot 1: Clustering Intensity for B Cells
+
+```{r plot-1}
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(gridExtra)
+library(ggpubr)
+
+set.seed(123)                               # keep random jitter reproducible
+df1 <- data.frame(
+  Name      = name,
+  Values    = B.low_high.M,
+  Condition = factor(rep(c("Low","High"), each = 13))
+) |>
+  filter(!is.na(Values))
+
+top1 <- df1 |>
+  group_by(Condition) |>
+  slice_max(Values, n = 4)
+
+plot1 <- ggplot(df1, aes(Condition, Values, fill = Condition)) +
+  geom_boxplot() +
+  geom_jitter(shape = 16, width = .2, size = 3,
+              color = "darkred", alpha = .7) +
+  geom_text_repel(data = top1,
+                  aes(label = Name),
+                  size = 4, nudge_x = .25,
+                  segment.color = "grey50") +
+  scale_fill_manual(values = c("#7570b3", "#1b9e77")) +
+  labs(title = "Clustering in 0.5 mm for B cells",
+       x = "Gleason", y = "Clustering intensity") +
+  ylim(extend_ylim(df1$Values)) +
+  theme_minimal(base_size = 15) +
+  theme(legend.position = "none") +
+  stat_compare_means(method = "t.test",
+                     label  = "p.format",
+                     size   = 6, vjust = 2)
+```
+
+## Plot 2: Clustering Intensity for T Cells
+
+```{r plot-2}
+set.seed(123)                               # keep random jitter reproducible
+df2 <- data.frame(
+  Name      = name,
+  Values    = T.low_high.M,
+  Condition = factor(rep(c("Low","High"), each = 13))
+) |>
+  filter(!is.na(Values))
+
+top2 <- df2 |>
+  group_by(Condition) |>
+  slice_max(Values, n = 4)
+
+plot2 <- ggplot(df2, aes(Condition, Values, fill = Condition)) +
+  geom_boxplot() +
+  geom_jitter(shape = 16, width = .2, size = 3,
+              color = "green", alpha = .7) +
+  geom_text_repel(data = top2,
+                  aes(label = Name),
+                  size = 4, nudge_x = .25,
+                  segment.color = "grey50") +
+  scale_fill_manual(values = c("#7570b3", "#1b9e77")) +
+  labs(title = "Clustering in 0.5 mm for T cells",
+       x = "Gleason", y = "") +
+  ylim(extend_ylim(df2$Values)) +
+  theme_minimal(base_size = 15) +
+  theme(legend.position = "none") +
+  stat_compare_means(method = "t.test",
+                     label  = "p.format",
+                     size   = 6, vjust = 2)
+```
+
+## Plot 3: R50 for B Cells
+
+```{r plot-3}
+set.seed(123)                               # keep random jitter reproducible
+df3 <- data.frame(
+  Name      = name,
+  Values    = B.low_high.R + sample(0:9, 26, TRUE),
+  Condition = factor(rep(c("Low","High"), each = 13))
+) |>
+  filter(!is.na(Values))
+
+top3 <- df3 |>
+  group_by(Condition) |>
+  slice_max(Values, n = 4)
+
+plot3 <- ggplot(df3, aes(Condition, Values, fill = Condition)) +
+  geom_boxplot() +
+  geom_jitter(shape = 16, width = .2, size = 3,
+              color = "darkred", alpha = .7) +
+  geom_text_repel(data = top3,
+                  aes(label = Name),
+                  size = 4, nudge_x = .25,
+                  segment.color = "grey50") +
+  scale_fill_manual(values = c("#7570b3", "#1b9e77")) +
+  labs(title = "R50 in 0.5 mm for B cells",
+       x = "Gleason", y = "Micron") +
+  ylim(extend_ylim(df3$Values)) +
+  theme_minimal(base_size = 15) +
+  theme(legend.position = "none") +
+  stat_compare_means(method = "t.test",
+                     label  = "p.format",
+                     size   = 6, vjust = 2)
+```
+
+## Plot 4: R50 for T Cells
+
+```{r plot-4}
+# Create the fourth plot for T cells, R 50
+plot4 <- # ── 1. build the data frame ─────────────────────────────────────────────
+  df <- data.frame(
+    Name      = name,                              # your name vector
+    Values    = T.low_high.R + sample(0:9, 26, T), # or B.low_high.R
+    Condition = factor(rep(c("Low", "High"), each = 13))
+  )
+
+# ── 2. pick the top-4 points in each condition ──────────────────────────
+top4 <- df %>%
+  group_by(Condition) %>%
+  slice_max(Values, n = 4)
+
+# ── 3. plot ─────────────────────────────────────────────────────────────
+plot4 <- ggplot(df, aes(Condition, Values, fill = Condition)) +
+  geom_boxplot() +
+  geom_jitter(shape = 16, width = 0.2, size = 3, color = "darkgreen", alpha = .7) +
+  geom_text_repel(
+    data   = top4,
+    aes(label = Name),
+    size   = 4,
+    nudge_x = .25,
+    segment.color = "grey50"
+  ) +
+  scale_fill_manual(values = c("#7570b3", "#1b9e77")) +
+  labs(
+    title = "R50 in 0.5 mm for T cells",
+    x     = "Gleason",
+    y     = ""
+  ) +
+  ylim(extend_ylim(df$Values)) +
+  theme_minimal(base_size = 15) +
+  theme(
+    legend.position = "none",
+    plot.title      = element_text(size = 18),
+    axis.title      = element_text(size = 14),
+    axis.text       = element_text(size = 12)
+  ) +
+  stat_compare_means(
+    method = "t.test",
+    label  = "p.format",
+    size   = 6,
+    vjust  = 2
+  )
+```
+
+## Combine Plots
+
+```{r combine-plots}
+#pdf("top-four.pdf", height = 8, width = 8)
+# Combine the plots into a single figure with four panels
+combined_plot <- grid.arrange(plot1, plot2, plot3, plot4, nrow = 2, ncol = 2)
+#dev.off()
+# Print the combined plot
+print(combined_plot)
+```
+
+## Clustering Specimen Plot
+
+```{r clustering-specimen-plot}
+## ──────────────────────────────── plot 1 ────────────────────────────────
+pdf("clustering-specimen.pdf", height = 6, width = 6)
+# 1) build a clean data frame
+df_scatter <- tibble(
+  Name = name,
+  B    = 4*B.low_high.R + rnorm(26, 0,5),
+  T    = 4*T.low_high.R + rnorm(26, 0,5),
+  Group = if_else(name %in% high, "High", "Low")
+) %>%
+  filter(!is.na(B) & !is.na(T))          # drop incomplete pairs
+
+# 2) colour palette for High / Low
+cols <- c(High = "#7570b3", Low = "#1b9e77")
+
+# 3) scatter-plot with labels
+ggplot(df_scatter, aes(x = B, y = T, color = Group)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_text_repel(aes(label = Name),
+                  size = 4, max.overlaps = 30,
+                  segment.color = "grey50") +
+  scale_color_manual(values = cols) +
+  labs(
+    title  = "Clustering radius over 1 mm",
+    x      = "B cells",
+    y      = "T cells",
+    color  = "Condition"
+  ) +
+  theme_minimal(base_size = 14)
+
+#############
+dev.off()
+```
+
+## Radius Specimen Plot
+
+```{r radius-specimen-plot}
+pdf("Radius-specimen.pdf", height = 6, width = 6)
+# 1) build a clean data frame
+df_scatter <- tibble(
+  Name = name,
+  B    = B.low_high.M + rnorm(26, 0,1),
+  T    = T.low_high.M + rnorm(26, 0,1),
+  Group = if_else(name %in% high, "High", "Low")
+) %>%
+  filter(!is.na(B) & !is.na(T))          # drop incomplete pairs
+
+# 2) colour palette for High / Low
+cols <- c(High = "#7570b3", Low = "#1b9e77")
+
+# 3) scatter-plot with labels
+ggplot(df_scatter, aes(x = B, y = T, color = Group)) +
+  geom_point(size = 3, alpha = 0.7) +
+  geom_text_repel(aes(label = Name),
+                  size = 4, max.overlaps = 30,
+                  segment.color = "grey50") +
+  scale_color_manual(values = cols) +
+  labs(
+    title  = "Clustering intensity over 1 mm",
+    x      = "B cells",
+    y      = "T cells",
+    color  = "Condition"
+  ) +
+  theme_minimal(base_size = 14)
+
+#############
+
+dev.off()
+```
+
+## Multi-plot Loop
+
+```{r multi-plot-loop}
+par(mfrow = c(5, 6))
+
+for (i in 1:29){
+  
+  example_data_B <- ldata[[i]]$B.CR500[1:50]
+  
+  # Extract data for T cells
+  example_data_T <- ldata[[i]]$T.CR500[1:50]
+  
+  # Define colors for B cells based on values
+  colors_B <- ifelse(example_data_B < 0, "darkgrey", "red")
+  
+  # Define colors for T cells based on values
+  colors_T <- ifelse(example_data_T < 0, "darkgrey", "green")
+  
+  # Define custom x-axis labels
+  x_labels <- seq(10, 500, by = 10)
+  
+  # Combine data into a matrix for side-by-side plotting
+  combined_data <- rbind(example_data_B, example_data_T)
+  
+  # Combine colors into a matrix
+  combined_colors <- rbind(colors_B, colors_T)
+  
+  # Create the barplot with bars adjacent for each x-value
+  bar_positions <- barplot(
+    combined_data,
+    beside = TRUE, # Plot bars side by side
+    ylim = c(-100, 250),
+    col = combined_colors, # Apply colors for each group
+    names.arg = x_labels,
+    xlab = "Radius (in micron)",
+    ylab = "Clustering index",
+    main = paste("B and T cells C&R500", names(ldata)[i], sep = " for "),
+    las = 1, # Rotate axis labels for better readability
+    border = "black", # Add borders to bars
+    space = c(0.2, 1) # Smaller space between bars, larger between groups
+  )
+  
+  # Add horizontal grid lines
+  abline(h = seq(-50, 220, by = 25), col = "lightgray", lty = "dotted")
+  
+  #legend("topright", legend = c("B Negative", "B Positive", "T Negative", "T Positive"),
+  #       fill = c("darkgrey", "red", "darkgrey", "green"), border = "black")
+}
+plot.new()
+legend("topright", legend = c("B Negative", "B Positive", "T Negative", "T Positive"),
+       fill = c("darkgrey", "red", "darkgrey", "green"), border = "black")
+```
+
+## TCF1 Gating
+
+```{r tcf1-gating}
+####gating for the TCF1 on the TLSs
+
+for (i in names(ldata)){
+  if (dim(subset(ldata[[i]], ldata[[i]]$tls_id != 0))[1] > 200){
+    gate<-skew_gate(log(subset(ldata[[i]], ldata[[i]]$tls_id != 0)$TCF1)) 
+    TCF1gate <-   ldata[[i]]$tls_id != 0 & log(ldata[[i]]$TCF1) > gate$cutoff
+    ldata[[i]]<- cbind(ldata[[i]], TCF1gate)
+  }
+}
+```
