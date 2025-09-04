@@ -70,4 +70,4 @@ TBA
 ADDITIONAL NOTES/COMMENTS
 --------------------------
 ​
-Please let **(Name, contact information)** know if any errors are found in this data.  
+Please let **(Ali Amiryousefi, ali_amiryousefi@hms.harvard.edu)** know if any errors are found in this data.  
